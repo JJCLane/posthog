@@ -139,6 +139,23 @@ OPEN_RESPONSES = {
         "Love the clean, modern interface",
         "Sometimes slow but generally reliable",
     ],
+    "open_choice": [
+        "Custom workflow automation",
+        "Integration with Slack",
+        "Better mobile experience",
+        "Real-time notifications",
+        "Advanced filtering options",
+        "Custom reporting templates",
+        "API access for our use case",
+        "Team permissions management",
+        "White-label options",
+        "Offline mode support",
+        "Data export in different formats",
+        "Custom branding options",
+        "SSO integration",
+        "Webhook support",
+        "Audit logging",
+    ],
 }
 
 
@@ -185,13 +202,19 @@ class Command(BaseCommand):
         return persons_data
 
     def add_arguments(self, parser):
-        parser.add_argument("count", type=int, help="Number of surveys to generate")
+        parser.add_argument(
+            "count",
+            type=int,
+            nargs="?",
+            default=1,
+            help="Number of surveys to generate (default: 1)",
+        )
         parser.add_argument("--team-id", type=int, help="Team ID to create surveys for")
         parser.add_argument(
             "--responses",
             type=int,
-            default=0,
-            help="Number of responses to generate per survey (default: 0, no responses)",
+            default=50,
+            help="Number of responses to generate per survey (default: 50)",
         )
         parser.add_argument(
             "--days-back",
@@ -199,6 +222,82 @@ class Command(BaseCommand):
             default=30,
             help="Generate responses over the last N days (default: 30)",
         )
+
+    def generate_question_of_type(
+        self, question_type: QuestionType, choice_type: Literal["single_choice", "multiple_choice"] | None = None
+    ) -> dict[str, Any]:
+        """Generate a question of a specific type."""
+        feature = random.choice(FEATURES)
+
+        if question_type == "open":
+            open_templates: list[str] = QUESTION_TEMPLATES["open"]
+            open_template = random.choice(open_templates)
+            question_text = open_template.format(feature=feature)
+            return {
+                "type": "open",
+                "question": question_text,
+                "description": f"Help us improve {feature}",
+                "descriptionContentType": "text",
+                "optional": random.choice([True, False]),
+                "buttonText": random.choice(["Submit", "Next", "Continue"]),
+            }
+
+        elif question_type == "rating":
+            rating_templates: list[str] = QUESTION_TEMPLATES["rating"]
+            rating_template = random.choice(rating_templates)
+            question_text = rating_template.format(feature=feature)
+            return {
+                "type": "rating",
+                "question": question_text,
+                "description": f"Rate your experience with {feature}",
+                "descriptionContentType": "text",
+                "optional": random.choice([True, False]),
+                "buttonText": random.choice(["Submit", "Next", "Continue"]),
+                "display": random.choice(["number", "emoji"]),
+                "scale": random.choice([5, 7, 10]),
+                "lowerBoundLabel": "Not at all",
+                "upperBoundLabel": "Extremely",
+            }
+
+        elif question_type == "multiple_choice":
+            mc_templates: list[MultipleChoiceTemplate] = QUESTION_TEMPLATES["multiple_choice"]
+            mc_template = random.choice(mc_templates)
+            question_text = mc_template["question"].format(feature=feature)
+            actual_type = choice_type if choice_type else random.choice(["single_choice", "multiple_choice"])
+            return {
+                "type": actual_type,
+                "question": question_text,
+                "description": f"Select all that apply for {feature}",
+                "descriptionContentType": "text",
+                "optional": random.choice([True, False]),
+                "buttonText": random.choice(["Submit", "Next", "Continue"]),
+                "choices": mc_template["choices"],
+                "shuffleOptions": random.choice([True, False]),
+                "hasOpenChoice": True,  # Always include open-ended option for actionable surveys
+            }
+
+        else:  # link
+            link_templates: list[LinkTemplate] = QUESTION_TEMPLATES["link"]
+            link_template = random.choice(link_templates)
+            question_text = link_template["question"].format(feature=feature)
+            return {
+                "type": "link",
+                "question": question_text,
+                "description": f"Learn more about {feature}",
+                "descriptionContentType": "text",
+                "optional": True,
+                "buttonText": "Check it out",
+                "link": link_template["link"],
+            }
+
+    def generate_required_questions(self) -> list[dict[str, Any]]:
+        """Generate one question of each actionable type."""
+        return [
+            self.generate_question_of_type("open"),
+            self.generate_question_of_type("rating"),
+            self.generate_question_of_type("multiple_choice", choice_type="single_choice"),
+            self.generate_question_of_type("multiple_choice", choice_type="multiple_choice"),
+        ]
 
     def generate_random_question(self) -> dict[str, Any]:
         question_type: QuestionType = random.choice(["open", "rating", "multiple_choice", "link"])
@@ -273,8 +372,10 @@ class Command(BaseCommand):
             }
 
     def generate_random_survey(self, team_id: int, user_id: int) -> dict[str, Any]:
-        num_questions = random.randint(1, 5)
-        questions = [self.generate_random_question() for _ in range(num_questions)]
+        # Always include the 4 required actionable question types
+        questions = self.generate_required_questions()
+        # Shuffle to vary the order
+        random.shuffle(questions)
 
         # Generate a name based on the questions
         question_types = [q["type"] for q in questions]
@@ -359,7 +460,11 @@ class Command(BaseCommand):
 
         elif question_type == "single_choice":
             choices = question.get("choices", [])
+            has_open_choice = question.get("hasOpenChoice", False)
             if choices:
+                # 20% chance of using open-ended response if available
+                if has_open_choice and random.random() < 0.2:
+                    return random.choice(OPEN_RESPONSES["open_choice"])
                 # Weight first choice higher (common pattern)
                 if random.random() < 0.4:
                     return choices[0]
@@ -368,7 +473,14 @@ class Command(BaseCommand):
 
         elif question_type == "multiple_choice":
             choices = question.get("choices", [])
+            has_open_choice = question.get("hasOpenChoice", False)
             if choices:
+                # 25% chance of including an open-ended response if available
+                if has_open_choice and random.random() < 0.25:
+                    num_selections = random.randint(1, min(2, len(choices)))
+                    selected = random.sample(choices, num_selections)
+                    selected.append(random.choice(OPEN_RESPONSES["open_choice"]))
+                    return selected
                 num_selections = random.randint(1, min(3, len(choices)))
                 return random.sample(choices, num_selections)
             return None

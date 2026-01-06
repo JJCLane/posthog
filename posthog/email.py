@@ -3,6 +3,8 @@
 import sys
 import html
 import uuid
+import hashlib
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -11,6 +13,7 @@ if TYPE_CHECKING:
 
 from django.conf import settings
 from django.core import exceptions, mail
+from django.core.cache import cache
 from django.core.mail.backends.smtp import EmailBackend
 from django.db import transaction
 from django.template.loader import get_template
@@ -18,6 +21,7 @@ from django.utils import timezone
 from django.utils.module_loading import import_string
 
 import requests
+import structlog
 import css_inline
 import posthoganalytics
 from celery import shared_task
@@ -26,7 +30,10 @@ from lxml import html as lxml_html
 from posthog.exceptions_capture import capture_exception
 from posthog.models.instance_setting import get_instance_setting
 from posthog.models.messaging import MessagingRecord
+from posthog.settings.web import TWO_FACTOR_REMEMBER_COOKIE_AGE
 from posthog.tasks.utils import CeleryQueue
+
+logger = structlog.get_logger(__name__)
 
 
 def inline_css(value: str) -> str:
@@ -76,6 +83,115 @@ def is_email_available(with_absolute_urls: bool = False) -> bool:
         return False
 
     return True
+
+
+# ESP Suppression Check - used to determine if an email address is on Customer.io's suppression list
+ESP_SUPPRESSION_CACHE_TTL = TWO_FACTOR_REMEMBER_COOKIE_AGE  # 30 days
+ESP_SUPPRESSION_API_TIMEOUT = 5
+
+
+@dataclass
+class ESPSuppressionResult:
+    is_suppressed: bool
+    from_cache: bool
+    reason: Optional[str] = None
+
+
+def is_esp_suppression_configured() -> bool:
+    return bool(getattr(settings, "CUSTOMER_IO_APP_API_KEY", ""))
+
+
+def _get_esp_suppression_cache_key(email: str) -> str:
+    email_hash = hashlib.sha256(email.lower().encode()).hexdigest()
+    return f"email_mfa_suppressed:{email_hash}"
+
+
+def check_esp_suppression(email: str) -> ESPSuppressionResult:
+    """Check if an email address is on the ESP suppression list."""
+    if not is_esp_suppression_configured():
+        return ESPSuppressionResult(is_suppressed=False, from_cache=False, reason="not_configured")
+
+    if not email:
+        return ESPSuppressionResult(is_suppressed=False, from_cache=False, reason="empty_email")
+
+    cache_key = _get_esp_suppression_cache_key(email)
+    cached_result = cache.get(cache_key)
+
+    if cached_result is not None:
+        logger.info(
+            "ESP suppression check cache hit",
+            email_hash=hashlib.sha256(email.lower().encode()).hexdigest()[:8],
+            cached_result=cached_result,
+        )
+        return ESPSuppressionResult(
+            is_suppressed=cached_result, from_cache=True, reason="suppressed" if cached_result else None
+        )
+
+    try:
+        api_key = getattr(settings, "CUSTOMER_IO_APP_API_KEY", "")
+        api_url = getattr(settings, "CUSTOMER_IO_API_URL", "https://api-eu.customer.io")
+
+        if not api_key:
+            return ESPSuppressionResult(is_suppressed=False, from_cache=False, reason="no_api_key")
+
+        response = requests.get(
+            f"{api_url}/v1/esp/suppressions",
+            params={"email": email},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=ESP_SUPPRESSION_API_TIMEOUT,
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            is_suppressed = _parse_esp_suppression_response(data)
+            cache.set(cache_key, is_suppressed, ESP_SUPPRESSION_CACHE_TTL)
+            logger.info(
+                "ESP suppression check API success",
+                email_hash=hashlib.sha256(email.lower().encode()).hexdigest()[:8],
+                is_suppressed=is_suppressed,
+            )
+            return ESPSuppressionResult(
+                is_suppressed=is_suppressed,
+                from_cache=False,
+                reason="suppressed" if is_suppressed else None,
+            )
+        elif response.status_code == 404:
+            cache.set(cache_key, False, ESP_SUPPRESSION_CACHE_TTL)
+            logger.info(
+                "ESP suppression check: email not on suppression list",
+                email_hash=hashlib.sha256(email.lower().encode()).hexdigest()[:8],
+            )
+            return ESPSuppressionResult(is_suppressed=False, from_cache=False, reason=None)
+        else:
+            logger.warning(
+                "ESP suppression check API error - failing closed",
+                status_code=response.status_code,
+                response_text=response.text[:200] if response.text else None,
+            )
+            return ESPSuppressionResult(is_suppressed=True, from_cache=False, reason="api_error")
+
+    except requests.Timeout:
+        logger.warning("ESP suppression check timeout - failing closed")
+        return ESPSuppressionResult(is_suppressed=True, from_cache=False, reason="api_error")
+    except requests.RequestException as e:
+        logger.warning("ESP suppression check network error - failing closed", error=str(e))
+        return ESPSuppressionResult(is_suppressed=True, from_cache=False, reason="api_error")
+    except Exception as e:
+        logger.exception("ESP suppression check unexpected error - failing closed", error=str(e))
+        return ESPSuppressionResult(is_suppressed=True, from_cache=False, reason="api_error")
+
+
+def _parse_esp_suppression_response(data: Any) -> bool:
+    if not data:
+        return False
+    if isinstance(data, list):
+        return len(data) > 0
+    if isinstance(data, dict):
+        return bool(data.get("suppressed", False)) or bool(data.get("suppressions", []))
+    return False
 
 
 EMAIL_TASK_KWARGS = {

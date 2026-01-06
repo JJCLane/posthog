@@ -272,13 +272,9 @@ class EmailMFACheckResult:
 
 class EmailMFAVerifier:
     def _check_esp_suppression(self, user: User) -> Optional[tuple[bool, str, bool]]:
-        """Check if user's email is on ESP suppression list.
+        from posthog.email import check_esp_suppression
 
-        Returns tuple of (is_suppressed, reason, from_cache) or None if check not applicable.
-        """
-        from posthog.services.esp_suppression import esp_suppression_service
-
-        result = esp_suppression_service.check_email_suppressed(user.email)
+        result = check_esp_suppression(user.email)
         return (result.is_suppressed, result.reason or "", result.from_cache)
 
     def _capture_suppression_bypass_event(self, user: User, reason: str, cached: bool) -> None:

@@ -16,7 +16,7 @@ import {
     onboardingErrorTrackingAlertsLogic,
 } from './onboardingErrorTrackingAlertsLogic'
 
-export function OnboardingErrorTrackingAlertsStep({ stepKey }: { stepKey: OnboardingStepKey }): JSX.Element {
+export function OnboardingErrorTrackingAlertsStep(): JSX.Element {
     const { integration, slackIntegrations, slackAvailable, connectionConfig, isConnectionConfigSubmitting } =
         useValues(onboardingErrorTrackingAlertsLogic)
     const { setIntegration } = useActions(onboardingErrorTrackingAlertsLogic)
@@ -58,7 +58,12 @@ export function OnboardingErrorTrackingAlertsStep({ stepKey }: { stepKey: Onboar
     }
 
     return (
-        <OnboardingStep title="Configure alerts" stepKey={stepKey} showContinue={false} showSkip={!integration}>
+        <OnboardingStep
+            title="Configure alerts"
+            stepKey={OnboardingStepKey.ALERTS}
+            showContinue={false}
+            showSkip={!integration}
+        >
             <p>Get notified when a new issue occurs. Don't worry this can always be reconfigured later.</p>
             {integration === null ? (
                 <LemonTable

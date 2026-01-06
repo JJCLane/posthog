@@ -14,7 +14,7 @@ import { SourceMapStatus } from './source-maps/SourceMapStatus'
 import { automatedSourceMapsTechnologies } from './source-maps/SourceMapsSDKInstructionsMap'
 import { sourceMapsStepLogic } from './source-maps/sourceMapsStepLogic'
 
-export function OnboardingErrorTrackingSourceMapsStep({ stepKey }: { stepKey: OnboardingStepKey }): JSX.Element {
+export function OnboardingErrorTrackingSourceMapsStep(): JSX.Element {
     const { selectedOption, instructionsModalOpen, shouldShowContinue, shouldShowSourceMapStatus } =
         useValues(sourceMapsStepLogic)
     const { setSelectedOption, setInstructionsModalOpen } = useActions(sourceMapsStepLogic)
@@ -26,7 +26,7 @@ export function OnboardingErrorTrackingSourceMapsStep({ stepKey }: { stepKey: On
     return (
         <OnboardingStep
             title="Link source maps"
-            stepKey={stepKey}
+            stepKey={OnboardingStepKey.SOURCE_MAPS}
             showContinue={shouldShowContinue}
             showSkip={!shouldShowContinue}
         >

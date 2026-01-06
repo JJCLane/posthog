@@ -17,13 +17,7 @@ import { teamLogic } from 'scenes/teamLogic'
 import { userLogic } from 'scenes/userLogic'
 
 import { ProductKey } from '~/queries/schema/schema-general'
-import {
-    AvailableFeature,
-    OnboardingStepKey,
-    type SessionRecordingMaskingLevel,
-    TeamPublicType,
-    TeamType,
-} from '~/types'
+import { AvailableFeature, type SessionRecordingMaskingLevel, TeamPublicType, TeamType } from '~/types'
 
 import { OnboardingAIConsent } from './OnboardingAIConsent'
 import { OnboardingInviteTeammates } from './OnboardingInviteTeammates'
@@ -91,35 +85,35 @@ const OnboardingWrapper = ({
         }
 
         if (shouldShowDataWarehouseStep) {
-            const DataWarehouseStep = <OnboardingDataWarehouseSourcesStep stepKey={OnboardingStepKey.LINK_DATA} />
+            const DataWarehouseStep = <OnboardingDataWarehouseSourcesStep />
             steps = [...steps, DataWarehouseStep]
         }
 
         if (shouldShowReverseProxyStep) {
-            const ReverseProxyStep = <OnboardingReverseProxy stepKey={OnboardingStepKey.REVERSE_PROXY} />
+            const ReverseProxyStep = <OnboardingReverseProxy />
             steps = [...steps, ReverseProxyStep]
         }
 
         const billingProduct = billing?.products.find((p) => p.type === productKey)
         if (shouldShowBillingStep && billingProduct) {
-            const BillingStep = <OnboardingUpgradeStep product={billingProduct} stepKey={OnboardingStepKey.PLANS} />
+            const BillingStep = <OnboardingUpgradeStep product={billingProduct} />
 
             steps = [...steps, BillingStep]
         }
 
         if (shouldShowAIConsentStep) {
-            const aiConsentStep = <OnboardingAIConsent stepKey={OnboardingStepKey.AI_CONSENT} />
+            const aiConsentStep = <OnboardingAIConsent />
             steps = [...steps, aiConsentStep]
         }
 
         const userCannotInvite = minAdminRestrictionReason && !currentOrganization?.members_can_invite
         if (!userCannotInvite) {
-            const inviteTeammatesStep = <OnboardingInviteTeammates stepKey={OnboardingStepKey.INVITE_TEAMMATES} />
+            const inviteTeammatesStep = <OnboardingInviteTeammates />
             steps = [...steps, inviteTeammatesStep]
         }
 
         if (shouldShowTellUsMoreStep) {
-            const tellUsMoreStep = <OnboardingProjectData stepKey={OnboardingStepKey.TELL_US_MORE} />
+            const tellUsMoreStep = <OnboardingProjectData />
             steps = [...steps, tellUsMoreStep]
         }
 
@@ -239,17 +233,10 @@ const ProductAnalyticsOnboarding = (): JSX.Element => {
 
     return (
         <OnboardingWrapper>
-            <OnboardingInstallStep
-                sdkInstructionMap={ProductAnalyticsSDKInstructions}
-                productKey={ProductKey.PRODUCT_ANALYTICS}
-                stepKey={OnboardingStepKey.INSTALL}
-            />
-            <OnboardingProductConfiguration
-                stepKey={OnboardingStepKey.PRODUCT_CONFIGURATION}
-                options={filteredOptions}
-            />
+            <OnboardingInstallStep sdkInstructionMap={ProductAnalyticsSDKInstructions} />
+            <OnboardingProductConfiguration options={filteredOptions} />
 
-            <OnboardingSessionReplayConfiguration stepKey={OnboardingStepKey.SESSION_REPLAY} />
+            <OnboardingSessionReplayConfiguration />
         </OnboardingWrapper>
     )
 }
@@ -301,13 +288,9 @@ const WebAnalyticsOnboarding = (): JSX.Element => {
 
     return (
         <OnboardingWrapper>
-            <OnboardingInstallStep
-                sdkInstructionMap={WebAnalyticsSDKInstructions}
-                productKey={ProductKey.WEB_ANALYTICS}
-                stepKey={OnboardingStepKey.INSTALL}
-            />
-            <OnboardingWebAnalyticsAuthorizedDomainsStep stepKey={OnboardingStepKey.AUTHORIZED_DOMAINS} />
-            <OnboardingProductConfiguration stepKey={OnboardingStepKey.PRODUCT_CONFIGURATION} options={options} />
+            <OnboardingInstallStep sdkInstructionMap={WebAnalyticsSDKInstructions} />
+            <OnboardingWebAnalyticsAuthorizedDomainsStep />
+            <OnboardingProductConfiguration options={options} />
         </OnboardingWrapper>
     )
 }
@@ -378,16 +361,8 @@ const SessionReplayOnboarding = (): JSX.Element => {
 
     return (
         <OnboardingWrapper>
-            <OnboardingInstallStep
-                sdkInstructionMap={SessionReplaySDKInstructions}
-                productKey={ProductKey.SESSION_REPLAY}
-                stepKey={OnboardingStepKey.INSTALL}
-            />
-            <OnboardingProductConfiguration
-                stepKey={OnboardingStepKey.PRODUCT_CONFIGURATION}
-                options={configOptions}
-                product={ProductKey.SESSION_REPLAY}
-            />
+            <OnboardingInstallStep sdkInstructionMap={SessionReplaySDKInstructions} />
+            <OnboardingProductConfiguration options={configOptions} />
         </OnboardingWrapper>
     )
 }
@@ -395,11 +370,7 @@ const SessionReplayOnboarding = (): JSX.Element => {
 const FeatureFlagsOnboarding = (): JSX.Element => {
     return (
         <OnboardingWrapper>
-            <OnboardingInstallStep
-                sdkInstructionMap={FeatureFlagsSDKInstructions}
-                productKey={ProductKey.FEATURE_FLAGS}
-                stepKey={OnboardingStepKey.INSTALL}
-            />
+            <OnboardingInstallStep sdkInstructionMap={FeatureFlagsSDKInstructions} />
         </OnboardingWrapper>
     )
 }
@@ -407,11 +378,7 @@ const FeatureFlagsOnboarding = (): JSX.Element => {
 const ExperimentsOnboarding = (): JSX.Element => {
     return (
         <OnboardingWrapper>
-            <OnboardingInstallStep
-                sdkInstructionMap={ExperimentsSDKInstructions}
-                productKey={ProductKey.EXPERIMENTS}
-                stepKey={OnboardingStepKey.INSTALL}
-            />
+            <OnboardingInstallStep sdkInstructionMap={ExperimentsSDKInstructions} />
         </OnboardingWrapper>
     )
 }
@@ -419,11 +386,7 @@ const ExperimentsOnboarding = (): JSX.Element => {
 const SurveysOnboarding = (): JSX.Element => {
     return (
         <OnboardingWrapper>
-            <OnboardingInstallStep
-                sdkInstructionMap={SurveysSDKInstructions}
-                productKey={ProductKey.SURVEYS}
-                stepKey={OnboardingStepKey.INSTALL}
-            />
+            <OnboardingInstallStep sdkInstructionMap={SurveysSDKInstructions} />
         </OnboardingWrapper>
     )
 }
@@ -431,7 +394,7 @@ const SurveysOnboarding = (): JSX.Element => {
 const DataWarehouseOnboarding = (): JSX.Element => {
     return (
         <OnboardingWrapper>
-            <OnboardingDataWarehouseSourcesStep stepKey={OnboardingStepKey.LINK_DATA} />
+            <OnboardingDataWarehouseSourcesStep />
         </OnboardingWrapper>
     )
 }
@@ -447,13 +410,9 @@ const ErrorTrackingOnboarding = (): JSX.Element => {
                 }
             }}
         >
-            <OnboardingInstallStep
-                sdkInstructionMap={ErrorTrackingSDKInstructions}
-                productKey={ProductKey.ERROR_TRACKING}
-                stepKey={OnboardingStepKey.INSTALL}
-            />
-            <OnboardingErrorTrackingSourceMapsStep stepKey={OnboardingStepKey.SOURCE_MAPS} />
-            <OnboardingErrorTrackingAlertsStep stepKey={OnboardingStepKey.ALERTS} />
+            <OnboardingInstallStep sdkInstructionMap={ErrorTrackingSDKInstructions} />
+            <OnboardingErrorTrackingSourceMapsStep />
+            <OnboardingErrorTrackingAlertsStep />
         </OnboardingWrapper>
     )
 }
@@ -461,12 +420,7 @@ const ErrorTrackingOnboarding = (): JSX.Element => {
 const LLMAnalyticsOnboarding = (): JSX.Element => {
     return (
         <OnboardingWrapper>
-            <OnboardingInstallStep
-                sdkInstructionMap={LLMAnalyticsSDKInstructions}
-                productKey={ProductKey.LLM_ANALYTICS}
-                stepKey={OnboardingStepKey.INSTALL}
-                listeningForName="LLM generation"
-            />
+            <OnboardingInstallStep sdkInstructionMap={LLMAnalyticsSDKInstructions} listeningForName="LLM generation" />
         </OnboardingWrapper>
     )
 }

@@ -7,17 +7,16 @@ import { useHogfetti } from 'lib/components/Hogfetti/Hogfetti'
 import { SupermanHog } from 'lib/components/hedgehogs'
 import { billingLogic } from 'scenes/billing/billingLogic'
 
-import type { BillingProductV2Type, OnboardingStepKey } from '~/types'
+import { type BillingProductV2Type, OnboardingStepKey } from '~/types'
 
 import { OnboardingStep } from '../OnboardingStep'
 import PlanCards from './PlanCards'
 
 type Props = {
     product: BillingProductV2Type
-    stepKey: OnboardingStepKey
 }
 
-export const OnboardingUpgradeStep = ({ product, stepKey }: Props): JSX.Element => {
+export const OnboardingUpgradeStep = ({ product }: Props): JSX.Element => {
     const { billingLoading } = useValues(billingLogic)
 
     if (billingLoading) {
@@ -29,7 +28,7 @@ export const OnboardingUpgradeStep = ({ product, stepKey }: Props): JSX.Element 
     }
 
     return (
-        <OnboardingStep title="Select a plan" stepKey={stepKey} showContinue={!!product.subscribed}>
+        <OnboardingStep title="Select a plan" stepKey={OnboardingStepKey.PLANS} showContinue={!!product.subscribed}>
             {!product.subscribed && <PlanCards product={product} />}
             {product.subscribed && <ProductSubscribed product={product} />}
         </OnboardingStep>

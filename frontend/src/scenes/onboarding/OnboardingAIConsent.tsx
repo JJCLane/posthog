@@ -22,7 +22,7 @@ const EXAMPLE_PROMPTS = [
     'How many people actually use the dashboard?',
 ]
 
-export const OnboardingAIConsent = ({ stepKey }: { stepKey: OnboardingStepKey }): JSX.Element => {
+export const OnboardingAIConsent = (): JSX.Element => {
     const { currentOrganization, currentOrganizationLoading } = useValues(organizationLogic)
     const { updateOrganization } = useActions(organizationLogic)
 
@@ -43,7 +43,7 @@ export const OnboardingAIConsent = ({ stepKey }: { stepKey: OnboardingStepKey })
 
     return (
         <OnboardingStep
-            stepKey={stepKey}
+            stepKey={OnboardingStepKey.AI_CONSENT}
             title={isEnabledForOrganization ? 'PostHog AI is ready' : 'Activate PostHog AI'}
             onContinue={handleContinue}
         >

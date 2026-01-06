@@ -8,18 +8,14 @@ import { OnboardingStepKey } from '~/types'
 import { OnboardingStep } from '../OnboardingStep'
 import { onboardingLogic } from '../onboardingLogic'
 
-export function OnboardingDataWarehouseSourcesStep({
-    stepKey = OnboardingStepKey.INSTALL,
-}: {
-    stepKey?: OnboardingStepKey
-}): JSX.Element {
+export function OnboardingDataWarehouseSourcesStep(): JSX.Element {
     const { goToNextStep } = useActions(onboardingLogic)
     const { availableSourcesLoading } = useValues(availableSourcesDataLogic)
 
     return (
         <OnboardingStep
             title="Connect your data for better insights"
-            stepKey={stepKey}
+            stepKey={OnboardingStepKey.LINK_DATA}
             showContinue={false}
             showSkip={!availableSourcesLoading}
             subtitle="Link sources like Stripe and Hubspot so you can query them alongside product data to find correlations."

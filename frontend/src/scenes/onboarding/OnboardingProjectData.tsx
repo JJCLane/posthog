@@ -10,13 +10,13 @@ import { OnboardingStepKey } from '~/types'
 import { OnboardingStep } from './OnboardingStep'
 import { onboardingLogic } from './onboardingLogic'
 
-export const OnboardingProjectData = ({ stepKey }: { stepKey: OnboardingStepKey }): JSX.Element => {
+export const OnboardingProjectData = (): JSX.Element => {
     const { completeOnboarding } = useActions(onboardingLogic)
 
     return (
         <OnboardingStep
             title="Tell us more about your project"
-            stepKey={stepKey}
+            stepKey={OnboardingStepKey.TELL_US_MORE}
             showSkip
             continueText="Finish"
             onContinue={completeOnboarding}

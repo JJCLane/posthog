@@ -116,8 +116,16 @@ class ChatAgentRunner(BaseAgentRunner):
         return AssistantState(messages=[])
 
     def get_resumed_state(self) -> PartialAssistantState:
+        # Handle resume without message (e.g., approval flow where we just resume execution)
         if not self._latest_message:
-            return PartialAssistantState(messages=[])
+            new_state = PartialAssistantState(messages=[], graph_status="resumed", query_generation_retry_count=0)
+            if self._selected_agent_mode:
+                new_state.agent_mode = self._selected_agent_mode
+            # Preserve root_tool_call_id from saved state for approval flow resumption
+            # Without this, the tool executor can't find the original tool call to re-execute
+            if self._state and self._state.root_tool_call_id:
+                new_state.root_tool_call_id = self._state.root_tool_call_id
+            return new_state
         new_state = PartialAssistantState(
             messages=[self._latest_message], graph_status="resumed", query_generation_retry_count=0
         )

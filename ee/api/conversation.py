@@ -39,7 +39,12 @@ from ee.billing.quota_limiting import QuotaLimitingCaches, QuotaResource, is_tea
 from ee.hogai.api.serializers import ConversationSerializer
 from ee.hogai.chat_agent import AssistantGraph
 from ee.hogai.core.executor import AgentExecutor
-from ee.hogai.pending_operations import approve_pending_operation, delete_pending_operation, get_pending_operation
+from ee.hogai.pending_operations import (
+    approve_pending_operation,
+    delete_pending_operation,
+    get_pending_operation,
+    reject_pending_operation,
+)
 from ee.hogai.stream.redis_stream import get_conversation_stream_key
 from ee.hogai.utils.aio import async_to_sync
 from ee.hogai.utils.sse import AssistantSSESerializer
@@ -98,6 +103,7 @@ class MessageSerializer(MessageMinimalSerializer):
     session_id = serializers.CharField(required=False)
     deep_research_mode = serializers.BooleanField(required=False, default=False)
     agent_mode = serializers.ChoiceField(required=False, choices=[mode.value for mode in AgentMode])
+    approval_status = serializers.ChoiceField(required=False, choices=["approved", "rejected"], allow_null=True)
 
     def validate(self, data):
         if data["content"] is not None:
@@ -236,11 +242,12 @@ class ConversationViewSet(TeamAndOrgViewSetMixin, ListModelMixin, RetrieveModelM
 
         is_idle = conversation.status == Conversation.Status.IDLE
         has_message = serializer.validated_data.get("message") is not None
+        has_approval_status = serializer.validated_data.get("approval_status") is not None
 
         if has_message and not is_idle:
             raise Conflict("Cannot resume streaming with a new message")
         # If the frontend is trying to resume streaming for a finished conversation, return a conflict error
-        if not has_message and conversation.status == Conversation.Status.IDLE:
+        if not has_message and conversation.status == Conversation.Status.IDLE and not has_approval_status:
             raise exceptions.ValidationError("Cannot continue streaming from an idle conversation")
 
         # Skip billing for impersonated sessions (support agents) and mark conversations as internal
@@ -384,20 +391,21 @@ class ConversationViewSet(TeamAndOrgViewSetMixin, ListModelMixin, RetrieveModelM
 
     @action(detail=True, methods=["POST"], url_path="operations/(?P<proposal_id>[^/.]+)/reject")
     def reject_operation(self, request: Request, proposal_id: str, *args, **kwargs):
-        """Reject and discard a pending dangerous operation."""
+        """Reject a pending dangerous operation, optionally with feedback."""
         conversation = self.get_object()
         pending = get_pending_operation(str(conversation.id), proposal_id)
+        feedback = request.data.get("feedback") if request.data else None
 
         # For rejection, DB operation is authoritative
-        # If DB succeeds, we then clean up cache (cache cleanup failure is acceptable)
+        # If DB succeeds, we then update cache with rejection status
         with transaction.atomic():
             # Lock the row to prevent concurrent JSONField updates from overwriting each other
             locked_conversation = Conversation.objects.select_for_update().get(pk=conversation.pk)
             locked_conversation.approval_decisions[proposal_id] = "rejected"
             locked_conversation.save(update_fields=["approval_decisions"])
 
-        # Cache cleanup after DB success - if this fails, cache will expire naturally
+        # Mark operation as rejected in cache (so tool can find it and return rejection message)
         if pending:
-            delete_pending_operation(str(conversation.id), proposal_id)
+            reject_pending_operation(str(conversation.id), proposal_id, feedback=feedback)
 
         return Response({"status": "rejected"})

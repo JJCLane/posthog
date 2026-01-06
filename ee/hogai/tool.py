@@ -23,8 +23,10 @@ from ee.hogai.context.context import AssistantContextManager
 from ee.hogai.core.context import get_node_path, set_node_path
 from ee.hogai.core.mixins import AssistantContextMixin, AssistantDispatcherMixin
 from ee.hogai.pending_operations import (
+    clear_rejected_operation,
     delete_pending_operation,
     get_approved_operation_for_conversation,
+    get_rejected_operation_for_conversation,
     store_pending_operation,
 )
 from ee.hogai.registry import CONTEXTUAL_TOOL_NAME_TO_TOOL
@@ -41,13 +43,21 @@ class ToolMessagesArtifact(BaseModel):
 
 
 class DangerousOperationResponse(BaseModel):
-    """Response returned when a tool operation requires user approval."""
+    """Response returned when a tool operation requires user approval.
+
+    When returned as a tool artifact, the executor will detect this and raise
+    NodeInterrupt with proper wrapping for frontend rendering.
+    """
 
     status: Literal["pending_approval"] = "pending_approval"
     proposal_id: str
     tool_name: str
     preview: str
     payload: dict[str, Any]
+
+
+# Sentinel content string to identify pending approval responses
+PENDING_APPROVAL_CONTENT = "__PENDING_APPROVAL__"
 
 
 class MaxTool(AssistantContextMixin, AssistantDispatcherMixin, BaseTool):
@@ -99,7 +109,9 @@ class MaxTool(AssistantContextMixin, AssistantDispatcherMixin, BaseTool):
     def _get_conversation_id(self) -> str | None:
         """Extract conversation_id from the config."""
         configurable = self._config.get("configurable", {})
-        return configurable.get("thread_id")
+        thread_id = configurable.get("thread_id")
+        # Ensure we return a string for consistent cache key matching
+        return str(thread_id) if thread_id is not None else None
 
     def get_required_resource_access(self) -> list[tuple[APIScopeObject, AccessControlLevel]]:
         """
@@ -236,20 +248,38 @@ class MaxTool(AssistantContextMixin, AssistantDispatcherMixin, BaseTool):
         Handle dangerous operation approval flow.
 
         Returns:
-            - tuple[str, Any]: Result if an approved operation was executed or approval is needed
+            - tuple[str, Any]: Result if an approved operation was executed, rejection message,
+                               or DangerousOperationResponse requiring approval
             - None: If normal execution should proceed
         """
         conversation_id = self._get_conversation_id()
 
-        # Check for approved operation - execute with stored payload
         if conversation_id:
+            # Check for approved operation - execute with stored payload
             approved_op = get_approved_operation_for_conversation(conversation_id, self.name)
             if approved_op:
                 delete_pending_operation(conversation_id, approved_op["proposal_id"])
                 stored_kwargs = self._reconstruct_kwargs_from_payload(approved_op["payload"])
                 return await self._arun_impl(**stored_kwargs)
 
-        # Check if this operation requires approval
+            # Check for rejected operation - return rejection message to LLM
+            rejected_op = get_rejected_operation_for_conversation(conversation_id, self.name)
+            if rejected_op:
+                clear_rejected_operation(conversation_id, self.name)
+                feedback = rejected_op.get("feedback")
+                if feedback:
+                    return (
+                        f"The user rejected this operation with the following feedback: {feedback}. "
+                        "Please acknowledge their feedback and adjust your approach accordingly.",
+                        None,
+                    )
+                return (
+                    "The user rejected this operation. "
+                    "Please acknowledge their decision and ask if they would like to proceed differently.",
+                    None,
+                )
+
+        # Check if this operation requires approval - return DangerousOperationResponse
         if self.is_dangerous_operation(**kwargs):
             return await self._create_dangerous_operation_response(**kwargs)
 
@@ -276,17 +306,22 @@ class MaxTool(AssistantContextMixin, AssistantDispatcherMixin, BaseTool):
                 serialized[key] = value
         return serialized
 
-    async def _create_dangerous_operation_response(self, **kwargs) -> tuple[str, Any] | None:
-        """Create a dangerous operation response requiring user approval."""
+    async def _create_dangerous_operation_response(self, **kwargs) -> tuple[str, DangerousOperationResponse]:
+        """
+        Create a dangerous operation response requiring user approval.
+
+        Returns:
+            Tuple of (PENDING_APPROVAL_CONTENT, DangerousOperationResponse).
+            The executor will detect this and raise NodeInterrupt with proper wrapping.
+        """
         conversation_id = self._get_conversation_id()
 
-        # Without conversation_id, we can't track approvals - fall through to normal execution
+        # Without conversation_id, we can't track approvals - log warning and proceed anyway
         if not conversation_id:
             logger.warning(
-                "Cannot create dangerous operation response without conversation_id, executing without approval",
+                "Creating dangerous operation response without conversation_id - approval tracking unavailable",
                 tool_name=self.name,
             )
-            return None
 
         proposal_id = str(uuid.uuid4())
         preview = self.format_dangerous_operation_preview(**kwargs)
@@ -294,12 +329,13 @@ class MaxTool(AssistantContextMixin, AssistantDispatcherMixin, BaseTool):
         # Serialize kwargs for storage (Pydantic models -> dicts)
         serialized_payload = self._serialize_kwargs_for_storage(kwargs)
 
-        await store_pending_operation(
-            conversation_id=conversation_id,
-            proposal_id=proposal_id,
-            tool_name=self.name,
-            payload=serialized_payload,
-        )
+        if conversation_id:
+            await store_pending_operation(
+                conversation_id=conversation_id,
+                proposal_id=proposal_id,
+                tool_name=self.name,
+                payload=serialized_payload,
+            )
 
         response = DangerousOperationResponse(
             proposal_id=proposal_id,
@@ -307,14 +343,8 @@ class MaxTool(AssistantContextMixin, AssistantDispatcherMixin, BaseTool):
             preview=preview,
             payload=serialized_payload,
         )
-        # LLM content and response dict as artifact for ui_payload
-        return (
-            "STOP. This operation requires explicit user approval before proceeding. "
-            "The user is now seeing an approval dialog. Do NOT continue, do NOT summarize, do NOT say 'Done'. "
-            "Wait silently for the user's response. "
-            "When the user approves, call this tool again with the same arguments - it will execute normally.",
-            response.model_dump(),
-        )
+        # Return marker tuple - executor will detect DangerousOperationResponse and raise NodeInterrupt
+        return (PENDING_APPROVAL_CONTENT, response)
 
     @property
     def node_name(self) -> str:

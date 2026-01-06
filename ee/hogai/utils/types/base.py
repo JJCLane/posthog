@@ -263,6 +263,10 @@ class BaseStateWithMessages(BaseState):
     """
     Whether the graph was interrupted or resumed.
     """
+    interrupted_node: Optional[str] = Field(default=None)
+    """
+    The name of the node that was interrupted. Used to resume from the correct node.
+    """
     messages: Sequence[AssistantMessageUnion] = Field(default=[])
     """
     Messages exposed to the user.

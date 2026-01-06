@@ -15,7 +15,7 @@ from posthog.sync import database_sync_to_async
 from ee.hogai.artifacts.manager import ArtifactManager, DatabaseArtifactResult, ModelArtifactResult, StateArtifactResult
 from ee.hogai.context.dashboard.context import DashboardContext, DashboardInsightContext
 from ee.hogai.context.insight.context import InsightContext
-from ee.hogai.tool import MaxTool, ToolMessagesArtifact
+from ee.hogai.tool import DangerousOperationResponse, MaxTool, ToolMessagesArtifact
 from ee.hogai.tools.upsert_dashboard.prompts import (
     CREATE_NO_INSIGHTS_PROMPT,
     DASHBOARD_NOT_FOUND_PROMPT,
@@ -96,11 +96,17 @@ class UpsertDashboardTool(MaxTool):
             return action.replace_insights is True or bool(action.update_insight_ids)
         return False
 
-    async def _create_dangerous_operation_response(self, **kwargs) -> tuple[str, dict] | None:
-        """Override to fetch dashboard details for a richer preview."""
+    async def _create_dangerous_operation_response(self, **kwargs) -> tuple[str, DangerousOperationResponse]:
+        """
+        Override to fetch dashboard details for a richer preview.
+
+        Returns:
+            Tuple of (PENDING_APPROVAL_CONTENT, DangerousOperationResponse).
+        """
         import uuid
 
         from ee.hogai.pending_operations import store_pending_operation
+        from ee.hogai.tool import PENDING_APPROVAL_CONTENT
 
         action: UpsertDashboardAction | None = kwargs.get("action")
         if not isinstance(action, UpdateDashboardToolArgs):
@@ -205,8 +211,6 @@ class UpsertDashboardTool(MaxTool):
                 payload={"action": action.model_dump()},
             )
 
-        from ee.hogai.tool import DangerousOperationResponse
-
         response = DangerousOperationResponse(
             proposal_id=proposal_id,
             tool_name=self.name,
@@ -214,15 +218,8 @@ class UpsertDashboardTool(MaxTool):
             payload={"action": action.model_dump()},
         )
 
-        # Stop and wait
-        stop_message = (
-            "STOP. This operation requires explicit user approval before proceeding. "
-            "The user is now seeing an approval dialog. Do NOT continue, do NOT summarize, do NOT say 'Done'. "
-            "Wait silently for the user's response. "
-            "When the user approves, call this tool again with the same arguments - it will execute normally."
-        )
-
-        return stop_message, response.model_dump()
+        # Return marker tuple - executor will detect DangerousOperationResponse and raise NodeInterrupt
+        return (PENDING_APPROVAL_CONTENT, response)
 
     async def _arun_impl(self, action: UpsertDashboardAction) -> tuple[str, ToolMessagesArtifact | None]:
         if isinstance(action, CreateDashboardToolArgs):
@@ -244,6 +241,18 @@ class UpsertDashboardTool(MaxTool):
 
     async def _handle_update(self, action: UpdateDashboardToolArgs) -> tuple[str, ToolMessagesArtifact | None]:
         """Handle UPDATE action: update an existing dashboard."""
+        from posthog.schema import VisualizationMessage
+
+        # DEBUG: Log state messages info for layout investigation
+        viz_msg_ids = [m.id for m in self._state.messages if isinstance(m, VisualizationMessage)]
+        logger.info(
+            "upsert_dashboard._handle_update called",
+            dashboard_id=action.dashboard_id,
+            update_insight_ids=action.update_insight_ids,
+            total_messages=len(self._state.messages),
+            visualization_message_ids=viz_msg_ids,
+        )
+
         try:
             dashboard = await Dashboard.objects.aget(id=action.dashboard_id, team=self._team, deleted=False)
         except Dashboard.DoesNotExist:
@@ -262,6 +271,14 @@ class UpsertDashboardTool(MaxTool):
             new_insights, update_missing = await self._resolve_insights(new_insight_ids)
             missing_ids.extend(update_missing)
 
+            # DEBUG: Log resolve results for layout investigation
+            logger.info(
+                "upsert_dashboard: resolved update_insight_ids",
+                new_insight_ids=new_insight_ids,
+                resolved_count=len(new_insights),
+                update_missing=update_missing,
+            )
+
             # Build mapping from old short_id to new Insight object.
             # _resolve_insights returns insights in order, but skips missing ones.
             # Build a dict from successfully resolved IDs to their Insight objects.
@@ -274,6 +291,13 @@ class UpsertDashboardTool(MaxTool):
             for old_id, new_id in action.update_insight_ids.items():
                 if new_id in resolved_by_id:
                     update_mapping[old_id] = resolved_by_id[new_id]
+
+            # DEBUG: Log update_mapping for layout investigation
+            logger.info(
+                "upsert_dashboard: built update_mapping",
+                update_mapping_keys=list(update_mapping.keys()),
+                update_mapping_empty=len(update_mapping) == 0,
+            )
 
         has_changes = insights or update_mapping or action.name is not None or action.description is not None
         if not has_changes:
@@ -415,13 +439,37 @@ class UpsertDashboardTool(MaxTool):
                 if tile.insight and tile.insight.short_id:
                     existing_tiles_by_short_id[tile.insight.short_id] = tile
 
+            # DEBUG: Log existing tiles for layout investigation
+            logger.info(
+                "upsert_dashboard._update_dashboard_with_tiles: tile lookup",
+                existing_tile_short_ids=list(existing_tiles_by_short_id.keys()),
+                update_mapping_keys=list(update_mapping.keys()),
+            )
+
             for old_short_id, new_insight in update_mapping.items():
                 if old_short_id in existing_tiles_by_short_id:
                     old_tile = existing_tiles_by_short_id[old_short_id]
                     if not old_tile.deleted:
                         # Update the tile in place
+                        logger.info(
+                            "upsert_dashboard: updating tile in place",
+                            old_short_id=old_short_id,
+                            new_insight_short_id=new_insight.short_id,
+                            tile_id=old_tile.id,
+                        )
                         old_tile.insight = new_insight
                         old_tile.save(update_fields=["insight"])
+                    else:
+                        logger.warning(
+                            "upsert_dashboard: tile found but is deleted",
+                            old_short_id=old_short_id,
+                        )
+                else:
+                    logger.warning(
+                        "upsert_dashboard: old_short_id NOT FOUND in existing tiles - layout will be lost!",
+                        old_short_id=old_short_id,
+                        available_short_ids=list(existing_tiles_by_short_id.keys()),
+                    )
 
         insight_ids = {i.id for i in insights}
         # Fetch all existing tiles (including soft-deleted) in one query

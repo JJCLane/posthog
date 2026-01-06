@@ -40,7 +40,7 @@ from ee.hogai.core.agent_modes.prompts import (
 from ee.hogai.core.agent_modes.toolkit import AgentToolkitManager
 from ee.hogai.core.executable import BaseAgentExecutable
 from ee.hogai.llm import MaxChatAnthropic
-from ee.hogai.tool import MaxTool, ToolMessagesArtifact
+from ee.hogai.tool import DangerousOperationResponse, MaxTool, ToolMessagesArtifact
 from ee.hogai.tool_errors import MaxToolError
 from ee.hogai.utils.anthropic import add_cache_control, convert_to_anthropic_messages
 from ee.hogai.utils.conversation_summarizer import AnthropicConversationSummarizer
@@ -319,15 +319,32 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
 class AgentToolsExecutable(BaseAgentLoopExecutable):
     async def arun(self, state: AssistantState, config: RunnableConfig) -> PartialAssistantState:
         last_message = state.messages[-1]
-
         reset_state = PartialAssistantState(root_tool_call_id=None)
-        # Should never happen, but just in case.
-        if not isinstance(last_message, AssistantMessage) or not last_message.id or not state.root_tool_call_id:
+
+        # Check if we're resuming from an interrupted approval flow
+        # In this case, the last message might be an AssistantToolCallMessage (the approval UI)
+        # and we need to find the original AssistantMessage with the tool call
+        tool_call_message = None
+        if isinstance(last_message, AssistantToolCallMessage) and state.root_tool_call_id:
+            # Look for the original AssistantMessage with the tool call
+            for msg in reversed(state.messages[:-1]):
+                if isinstance(msg, AssistantMessage) and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        if tc.id == state.root_tool_call_id:
+                            tool_call_message = msg
+                            break
+                    if tool_call_message:
+                        break
+        elif isinstance(last_message, AssistantMessage):
+            tool_call_message = last_message
+
+        if not tool_call_message or not tool_call_message.id or not state.root_tool_call_id:
             return reset_state
 
-        # Find the current tool call in the last message.
+        # Find the current tool call in the message.
         tool_call = next(
-            (tool_call for tool_call in last_message.tool_calls or [] if tool_call.id == state.root_tool_call_id), None
+            (tool_call for tool_call in tool_call_message.tool_calls or [] if tool_call.id == state.root_tool_call_id),
+            None,
         )
         if not tool_call:
             return reset_state
@@ -358,7 +375,7 @@ class AgentToolsExecutable(BaseAgentLoopExecutable):
         tool.set_node_path(
             (
                 *self.node_path[:-1],
-                NodePath(name=AssistantNodeName.ROOT_TOOLS, message_id=last_message.id, tool_call_id=tool_call.id),
+                NodePath(name=AssistantNodeName.ROOT_TOOLS, message_id=tool_call_message.id, tool_call_id=tool_call.id),
             )
         )
 
@@ -423,9 +440,6 @@ class AgentToolsExecutable(BaseAgentLoopExecutable):
                     )
                 ],
             )
-        except NodeInterrupt:
-            # Let NodeInterrupt propagate to the graph engine for tool interrupts
-            raise
         except Exception as e:
             logger.exception("Error calling tool", extra={"tool_name": tool_call.name, "error": str(e)})
             capture_exception(
@@ -439,6 +453,24 @@ class AgentToolsExecutable(BaseAgentLoopExecutable):
                         tool_call_id=tool_call.id,
                     )
                 ],
+            )
+
+        # Check if tool returned a DangerousOperationResponse requiring approval
+        if isinstance(result.artifact, DangerousOperationResponse):
+            # Wrap the response in AssistantToolCallMessage for frontend rendering
+            tool_message = AssistantToolCallMessage(
+                content="",  # No content for LLM - we're interrupting the flow
+                ui_payload={tool_call.name: result.artifact.model_dump()},
+                id=str(uuid4()),
+                tool_call_id=tool_call.id,
+            )
+            # Raise NodeInterrupt with serialized message and root_tool_call_id for resumption
+            # The root_tool_call_id is needed because Send() creates a temporary state that isn't checkpointed
+            raise NodeInterrupt(
+                {
+                    "message": tool_message.model_dump(),
+                    "root_tool_call_id": state.root_tool_call_id,
+                }
             )
 
         if isinstance(result.artifact, ToolMessagesArtifact):

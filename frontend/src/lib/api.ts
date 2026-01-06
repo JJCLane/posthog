@@ -4759,6 +4759,7 @@ const api = {
                 conversation?: string | null
                 trace_id: string
                 agent_mode?: AgentMode | null
+                approval_status?: 'approved' | 'rejected' | null
             },
             options?: ApiMethodOptions
         ): Promise<Response> {

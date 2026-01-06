@@ -6,8 +6,9 @@ from django.core.cache import cache
 PENDING_OP_TTL = timedelta(minutes=30)
 PENDING_OP_PREFIX = "pending_op:"
 APPROVED_OP_PREFIX = "approved_op:"
+REJECTED_OP_PREFIX = "rejected_op:"
 
-OperationStatus = Literal["pending", "approved"]
+OperationStatus = Literal["pending", "approved", "rejected"]
 
 
 async def store_pending_operation(
@@ -116,3 +117,74 @@ def get_approved_operation_for_conversation(
         return None
 
     return operation
+
+
+def reject_pending_operation(
+    conversation_id: str,
+    proposal_id: str,
+    feedback: str | None = None,
+) -> bool:
+    """
+    Mark a pending operation as rejected.
+    Creates a reverse lookup key so the tool can find the rejected operation.
+    Returns True if successful, False if operation not found.
+    """
+    operation = get_pending_operation(conversation_id, proposal_id)
+    if not operation:
+        return False
+
+    tool_name = operation.get("tool_name")
+    if not tool_name:
+        return False
+
+    key = f"{PENDING_OP_PREFIX}{conversation_id}:{proposal_id}"
+    operation["status"] = "rejected"
+    if feedback:
+        operation["feedback"] = feedback
+    cache.set(key, operation, timeout=int(PENDING_OP_TTL.total_seconds()))
+
+    # Create a reverse lookup key: conversation_id:tool_name -> proposal_id
+    # This ensures each tool can have at most one rejected operation per conversation
+    rejected_key = f"{REJECTED_OP_PREFIX}{conversation_id}:{tool_name}"
+    cache.set(rejected_key, proposal_id, timeout=int(PENDING_OP_TTL.total_seconds()))
+
+    return True
+
+
+def get_rejected_operation_for_conversation(
+    conversation_id: str,
+    tool_name: str,
+) -> dict[str, Any] | None:
+    """
+    Find a rejected operation for this conversation and tool.
+    Returns the operation dict if found and rejected, None otherwise.
+    """
+    # Look up the proposal_id from the reverse lookup key (keyed by conversation + tool)
+    rejected_key = f"{REJECTED_OP_PREFIX}{conversation_id}:{tool_name}"
+    proposal_id = cache.get(rejected_key)
+    if not proposal_id:
+        return None
+
+    # Get the operation and verify it's rejected
+    operation = get_pending_operation(conversation_id, proposal_id)
+    if not operation:
+        return None
+
+    if operation.get("status") != "rejected":
+        return None
+
+    return operation
+
+
+def clear_rejected_operation(
+    conversation_id: str,
+    tool_name: str,
+) -> None:
+    """Clear the rejected operation lookup key after the tool has handled it."""
+    rejected_key = f"{REJECTED_OP_PREFIX}{conversation_id}:{tool_name}"
+    proposal_id = cache.get(rejected_key)
+    if proposal_id:
+        cache.delete(rejected_key)
+        # Also delete the pending operation itself
+        key = f"{PENDING_OP_PREFIX}{conversation_id}:{proposal_id}"
+        cache.delete(key)

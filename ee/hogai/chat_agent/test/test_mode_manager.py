@@ -15,6 +15,7 @@ from langchain_core.runnables import RunnableConfig
 from parameterized import parameterized
 
 from posthog.schema import (
+    AgentMode,
     AssistantMessage,
     AssistantToolCall,
     AssistantToolCallMessage,
@@ -29,12 +30,14 @@ from posthog.schema import (
 from posthog.models import Team, User
 from posthog.models.organization import OrganizationMembership
 
-from ee.hogai.chat_agent.mode_manager import ChatAgentModeManager, ChatAgentPromptBuilder, ChatAgentToolkit
+from ee.hogai.chat_agent.mode_manager import ChatAgentModeManager
+from ee.hogai.chat_agent.prompt_builder import ChatAgentPlanPromptBuilder, ChatAgentPromptBuilder
 from ee.hogai.chat_agent.prompts import (
     ROOT_BILLING_CONTEXT_ERROR_PROMPT,
     ROOT_BILLING_CONTEXT_WITH_ACCESS_PROMPT,
     ROOT_BILLING_CONTEXT_WITH_NO_ACCESS_PROMPT,
 )
+from ee.hogai.chat_agent.toolkit import ChatAgentPlanToolkit, ChatAgentToolkit
 from ee.hogai.context import AssistantContextManager
 from ee.hogai.tools.replay.filter_session_recordings import FilterSessionRecordingsTool
 from ee.hogai.utils.tests import FakeChatAnthropic, FakeChatOpenAI
@@ -185,6 +188,106 @@ class TestAgentToolkit(BaseTest):
                 self.assertIn(expected, mode_names)
             for unexpected in unexpected_modes:
                 self.assertNotIn(unexpected, mode_names)
+
+
+class TestChatAgentModeManagerPlanMode(BaseTest):
+    def test_plan_mode_sets_supermode_and_mode(self):
+        """Test that agent_mode=PLAN from frontend sets _supermode=PLAN and _mode=PRODUCT_ANALYTICS"""
+        node_path = (NodePath(name=AssistantNodeName.ROOT, message_id="test_id", tool_call_id="test_tool_call_id"),)
+        context_manager = AssistantContextManager(
+            team=self.team, user=self.user, config=RunnableConfig(configurable={})
+        )
+
+        # Simulate frontend sending agent_mode=PLAN
+        state = AssistantState(messages=[HumanMessage(content="Test")], agent_mode=AgentMode.PLAN)
+
+        mode_manager = ChatAgentModeManager(
+            team=self.team,
+            user=self.user,
+            node_path=node_path,
+            context_manager=context_manager,
+            state=state,
+        )
+
+        self.assertEqual(mode_manager._supermode, AgentMode.PLAN)
+        self.assertEqual(mode_manager._mode, AgentMode.PRODUCT_ANALYTICS)
+
+    def test_plan_mode_uses_plan_mode_registry(self):
+        """Test that mode_registry returns plan mode registry when in plan mode"""
+        node_path = (NodePath(name=AssistantNodeName.ROOT, message_id="test_id", tool_call_id="test_tool_call_id"),)
+        context_manager = AssistantContextManager(
+            team=self.team, user=self.user, config=RunnableConfig(configurable={})
+        )
+        state = AssistantState(messages=[HumanMessage(content="Test")], agent_mode=AgentMode.PLAN)
+
+        mode_manager = ChatAgentModeManager(
+            team=self.team,
+            user=self.user,
+            node_path=node_path,
+            context_manager=context_manager,
+            state=state,
+        )
+
+        mode_names = list(mode_manager.mode_registry.keys())
+        self.assertIn(AgentMode.EXECUTION, mode_names)  # Plan mode has EXECUTION mode
+        self.assertIn(AgentMode.PRODUCT_ANALYTICS, mode_names)
+
+    def test_plan_mode_uses_plan_prompt_builder(self):
+        """Test that prompt_builder_class returns ChatAgentPlanPromptBuilder when in plan mode"""
+        node_path = (NodePath(name=AssistantNodeName.ROOT, message_id="test_id", tool_call_id="test_tool_call_id"),)
+        context_manager = AssistantContextManager(
+            team=self.team, user=self.user, config=RunnableConfig(configurable={})
+        )
+        state = AssistantState(messages=[HumanMessage(content="Test")], agent_mode=AgentMode.PLAN)
+
+        mode_manager = ChatAgentModeManager(
+            team=self.team,
+            user=self.user,
+            node_path=node_path,
+            context_manager=context_manager,
+            state=state,
+        )
+
+        self.assertEqual(mode_manager.prompt_builder_class, ChatAgentPlanPromptBuilder)
+
+    def test_plan_mode_uses_plan_toolkit(self):
+        """Test that toolkit_class returns ChatAgentPlanToolkit when in plan mode"""
+        node_path = (NodePath(name=AssistantNodeName.ROOT, message_id="test_id", tool_call_id="test_tool_call_id"),)
+        context_manager = AssistantContextManager(
+            team=self.team, user=self.user, config=RunnableConfig(configurable={})
+        )
+        state = AssistantState(messages=[HumanMessage(content="Test")], agent_mode=AgentMode.PLAN)
+
+        mode_manager = ChatAgentModeManager(
+            team=self.team,
+            user=self.user,
+            node_path=node_path,
+            context_manager=context_manager,
+            state=state,
+        )
+
+        self.assertEqual(mode_manager.toolkit_class, ChatAgentPlanToolkit)
+
+    def test_normal_mode_does_not_use_plan_classes(self):
+        """Test that normal mode uses regular classes, not plan classes"""
+        node_path = (NodePath(name=AssistantNodeName.ROOT, message_id="test_id", tool_call_id="test_tool_call_id"),)
+        context_manager = AssistantContextManager(
+            team=self.team, user=self.user, config=RunnableConfig(configurable={})
+        )
+        state = AssistantState(messages=[HumanMessage(content="Test")], agent_mode=AgentMode.PRODUCT_ANALYTICS)
+
+        mode_manager = ChatAgentModeManager(
+            team=self.team,
+            user=self.user,
+            node_path=node_path,
+            context_manager=context_manager,
+            state=state,
+        )
+
+        self.assertIsNone(mode_manager._supermode)
+        self.assertEqual(mode_manager.prompt_builder_class, ChatAgentPromptBuilder)
+        self.assertEqual(mode_manager.toolkit_class, ChatAgentToolkit)
+        self.assertNotIn(AgentMode.EXECUTION, mode_manager.mode_registry.keys())
 
 
 class TestAgentNode(ClickhouseTestMixin, BaseTest):

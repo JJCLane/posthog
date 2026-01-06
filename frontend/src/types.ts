@@ -284,6 +284,7 @@ export enum AccessControlResourceType {
     Survey = 'survey',
     ProductTour = 'product_tour',
     Experiment = 'experiment',
+    ExperimentSavedMetric = 'experiment_saved_metric',
     WebAnalytics = 'web_analytics',
     ActivityLog = 'activity_log',
 }
@@ -4763,6 +4764,7 @@ export type APIScopeObject =
     | 'evaluation'
     | 'event_definition'
     | 'experiment'
+    | 'experiment_saved_metric'
     | 'export'
     | 'feature_flag'
     | 'group'

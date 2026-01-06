@@ -1,6 +1,6 @@
 import { objectCleanWithEmpty, objectsEqual, removeUndefinedAndNull } from 'lib/utils'
 
-import { DataNode, InsightQueryNode, Node } from '~/queries/schema/schema-general'
+import { AnyResponseType, DataNode, InsightQueryNode, Node } from '~/queries/schema/schema-general'
 import {
     filterForQuery,
     filterKeyForQuery,
@@ -15,7 +15,7 @@ import {
     isTrendsQuery,
     isWebAnalyticsInsightQuery,
 } from '~/queries/utils'
-import { BaseMathType, ChartDisplayType } from '~/types'
+import { BaseMathType, ChartDisplayType, TrendResult } from '~/types'
 
 type CompareQueryOpts = { ignoreVisualizationOnlyChanges: boolean }
 
@@ -124,7 +124,7 @@ export const cleanInsightQuery = (query: InsightQueryNode, opts?: CompareQueryOp
     const dupQuery = JSON.parse(JSON.stringify(query))
 
     // remove undefined values, empty arrays and empty objects
-    const cleanedQuery = objectCleanWithEmpty(dupQuery) as InsightQueryNode
+    const cleanedQuery = objectCleanWithEmpty(removeUndefinedAndNull(dupQuery)) as InsightQueryNode
 
     if (isInsightQueryWithSeries(cleanedQuery)) {
         cleanedQuery.series?.forEach((series) => {
@@ -189,4 +189,50 @@ export const cleanInsightQuery = (query: InsightQueryNode, opts?: CompareQueryOp
     }
 
     return cleanedQuery
+}
+
+/**
+ * When renaming a series we don't need to actually run a query
+ * Instead patch in the new series names into the response
+ */
+export function transformResponseForSeriesNameChange(
+    response: Exclude<AnyResponseType, undefined>,
+    oldQuery: DataNode,
+    newQuery: DataNode
+): Exclude<AnyResponseType, undefined> {
+    // Only handle TrendsQuery for now
+    if (!isTrendsQuery(oldQuery) || !isTrendsQuery(newQuery)) {
+        return response
+    }
+
+    if (!response || !('results' in response) || !Array.isArray(response.results)) {
+        return response
+    }
+
+    const oldSeries = oldQuery.series || []
+    const newSeries = newQuery.series || []
+
+    // Check if any custom_name changed
+    const hasCustomNameChange = newSeries.some((s, i) => s.custom_name !== oldSeries[i]?.custom_name)
+
+    if (!hasCustomNameChange) {
+        return response
+    }
+
+    // Transform results to update action.custom_name
+    return {
+        ...response,
+        results: (response.results as TrendResult[]).map((result) => {
+            const order = result.action?.order ?? 0
+            const newCustomName = newSeries[order]?.custom_name
+
+            if (result.action?.custom_name !== newCustomName) {
+                return {
+                    ...result,
+                    action: { ...result.action, custom_name: newCustomName },
+                }
+            }
+            return result
+        }),
+    }
 }
